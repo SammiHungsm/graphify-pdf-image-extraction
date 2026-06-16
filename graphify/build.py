@@ -104,6 +104,29 @@ def edge_datas(G: nx.Graph, u: str, v: str) -> list[dict]:
     return [raw]
 
 
+def dedupe_edges(edges: list[dict]) -> list[dict]:
+    """Collapse exact parallel edges by ``(source, target, relation)``, keeping the
+    first occurrence.
+
+    The clustered build path runs edges through a NetworkX ``DiGraph``, which
+    collapses parallel edges automatically. The ``--no-cluster`` and incremental
+    ``update`` write paths bypass NetworkX and concatenate edge lists raw, so
+    duplicates accumulate and edge counts become non-deterministic across build
+    modes / repeated updates (#1317). Deduping on the connectivity identity is
+    zero-signal-loss and restores idempotency. Callers that intentionally keep
+    parallel edges (multigraph output) must not use this.
+    """
+    seen: set[tuple] = set()
+    out: list[dict] = []
+    for e in edges:
+        key = (e.get("source"), e.get("target"), e.get("relation"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+    return out
+
+
 def build_from_json(extraction: dict, *, directed: bool = False, root: str | Path | None = None) -> nx.Graph:
     """Build a NetworkX graph from an extraction dict.
 
@@ -165,9 +188,15 @@ def build_from_json(extraction: dict, *, directed: bool = False, root: str | Pat
     # _origin=="ast" as the canonical signal. AST nodes always win; any non-AST
     # node sharing (basename, label) with an AST node is a ghost.
     _loc_nodes: dict[tuple[str, str], str] = {}   # (basename, label) -> canonical node id
+    _loc_collisions: set[tuple[str, str]] = set()  # keys shared by 2+ AST nodes
     _noloc_nodes: dict[tuple[str, str], str] = {}  # (basename, label) -> ghost node id
 
     # Pass 1: collect canonical nodes — AST-origin nodes take precedence over LLM nodes.
+    # When 2+ AST nodes share a key (same-named symbols in same-named files across
+    # directories, e.g. render in two index.ts), the key is ambiguous: merging a
+    # ghost would pick an arbitrary winner via set-iteration order (#1257). Track
+    # those keys so Pass 2 skips them — same conservatism as
+    # _rewire_unique_stub_nodes, which only merges when exactly one real def exists.
     for nid in node_set:
         attrs = G.nodes[nid]
         label = str(attrs.get("label", "")).strip()
@@ -175,10 +204,16 @@ def build_from_json(extraction: dict, *, directed: bool = False, root: str | Pat
         basename = Path(sf).name if sf else ""
         if not label or not basename:
             continue
-        if attrs.get("source_location") or attrs.get("_origin") == "ast":
+        is_ast = attrs.get("_origin") == "ast"
+        if attrs.get("source_location") or is_ast:
             key = (basename, label)
-            # AST-origin nodes always overwrite; non-AST only written if key unseen.
-            if attrs.get("_origin") == "ast" or key not in _loc_nodes:
+            if is_ast:
+                # Two AST nodes on the same key is an ambiguous collision.
+                if key in _loc_nodes and G.nodes[_loc_nodes[key]].get("_origin") == "ast":
+                    _loc_collisions.add(key)
+                # AST-origin nodes always overwrite a prior non-AST entry.
+                _loc_nodes[key] = nid
+            elif key not in _loc_nodes:
                 _loc_nodes[key] = nid
 
     # Pass 2: find ghosts — non-AST nodes that have an AST canonical twin.
@@ -192,6 +227,8 @@ def build_from_json(extraction: dict, *, directed: bool = False, root: str | Pat
         if not label or not basename:
             continue
         key = (basename, label)
+        if key in _loc_collisions:
+            continue  # ambiguous key: no safe canonical winner, leave ghost intact
         if key in _loc_nodes and _loc_nodes[key] != nid:
             _noloc_nodes[key] = nid
     # For every ghost that has an AST counterpart, record a remap.
