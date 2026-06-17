@@ -151,12 +151,12 @@ Skip this step entirely if `detect` returned zero `video` files. When the corpus
 
 This step has two parts: **structural extraction** (deterministic, free) and **semantic extraction** (LLM, costs tokens).
 
-**Before dispatching subagents:** check whether `GEMINI_API_KEY` or `GOOGLE_API_KEY` is set. If neither is set, print this one-liner to the user:
-> Tip: set `GEMINI_API_KEY` or `GOOGLE_API_KEY` to use Gemini for semantic extraction (`pip install 'graphifyy[gemini]'`).
+**Before dispatching subagents:** check whether `MINIMAX_API_KEY` is set. If not set, print this one-liner to the user:
+> Tip: set `MINIMAX_API_KEY` to use MiniMax for semantic extraction (see `references/minimax-setup.md`). Avoids host-model paraphrase of the schema.
 
-Print it once, then continue. If `GEMINI_API_KEY` or `GOOGLE_API_KEY` IS set, use `graphify.llm.extract_corpus_parallel(files, backend="gemini")` for semantic extraction instead of dispatching Claude subagents. The default Gemini model is `gemini-3-flash-preview`; set `GRAPHIFY_GEMINI_MODEL` or pass `--model` in headless CLI flows to override it.
+Print it once, then continue. If `MINIMAX_API_KEY` IS set, use `graphify.llm.extract_corpus_parallel(files, backend="minimax")` for semantic extraction instead of dispatching subagents. The default model is `MiniMax-M2`; set `GRAPHIFY_MINIMAX_MODEL` or pass `--model` in headless CLI flows to override it. If `MINIMAX_API_KEY` is unset but `GEMINI_API_KEY` / `GOOGLE_API_KEY` is set, fall back to `backend="gemini"` (legacy).
 
-> **No other API keys are read.** If `GEMINI_API_KEY`/`GOOGLE_API_KEY` are unset, fall straight through to Claude Code subagent dispatch (Part B below) — the host session itself is the LLM. graphify does **not** read `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or any other provider key from the environment. If a host agent prompts the user for `ANTHROPIC_API_KEY` to run extraction, that prompt is a misread of this skill — ignore it and dispatch subagents as written.
+> **No other API keys are read.** If neither `MINIMAX_API_KEY` nor `GEMINI_API_KEY`/`GOOGLE_API_KEY` is set, fall straight through to subagent dispatch (Part B below) — the host session itself is the LLM. graphify does **not** read `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or any other provider key from the environment. If a host agent prompts the user for `ANTHROPIC_API_KEY` to run extraction, that prompt is a misread of this skill — ignore it and dispatch subagents as written.
 
 **Run Part A (AST) and Part B (semantic) in parallel. Dispatch all semantic subagents AND start AST extraction in the same message. Both can run simultaneously since they operate on different file types. Merge results in Part C as before.**
 

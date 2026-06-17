@@ -377,8 +377,65 @@ Edge direction rule — source is always the ACTOR, target is the ACTED-UPON:
 - imports/references: source = the file/entity that imports or references; target = the thing imported or referenced.
 - implements/inherits: source = the subclass/implementor; target = the base class/interface.
 
+Domain context — HK-listed company annual reports (SFC regulatory review):
+This corpus is HK-listed annual reports. Approach extraction as an SFC enforcement
+officer / financial auditor. Extract whatever is material to the issuer's industry —
+do not hard-code a sector list, infer from the filing.
+Exhaustiveness rule: extract ALL entities and relationships the filing discloses,
+not just the most prominent. Include every director, every subsidiary, every related
+party transaction, every contingent liability, every impairment, every regulatory
+mention — even if briefly stated or in footnotes. When in doubt, extract rather than
+skip; mark AMBIGUOUS, never omit.
+
+Priority entity types (use file_type:"concept" unless the entity is a person/org):
+- Corporate: Issuer, Subsidiary, Associate, JV, SPV, Connected Person,
+  Substantial Shareholder (>=5%), Controlling Shareholder (>30%),
+  Customer / Supplier disclosed as material (>10% revenue or cost).
+- People: Directors (ED / INED / Chair), CEO, CFO, Company Secretary,
+  Auditor (firm + signing partner if disclosed).
+- Financial: Contingent Liability, Provision, Impairment, Financial Instrument,
+  Guarantee, Pledge, Charge on Assets, Borrowing Facility.
+- Sector-specific: extract whatever the filing treats as material — e.g.
+  pipeline drugs and trial phases for biotech, land bank and presale for
+  property, NPL and Tier 1 for banks, reserves and mine life for resources,
+  DAU/ARR for tech, etc. Let the report tell you what matters.
+- Events: Related Party Transactions, impairments, litigation, regulatory
+  action (SFC / HKEX / PRC / overseas), share dealings by directors,
+  auditor changes, modified opinions, KAMs, going-concern notes.
+
+Priority relationship types (directed; reuse existing `relation` vocabulary
+where it fits, otherwise pick a clear snake_case verb):
+  owns_pct, controls, connected_to, beneficial_owner_of, director_of,
+  audited_by, related_to (for personal / family ties),
+  depends_on_customer, depends_on_supplier, impaired_by, litigating_against,
+  subject_to_investigation, dealt_shares_in, restated_from,
+  guarantees, pledges_assets_of, charges_over, lends_to.
+
+Temporal handling (multi-year corpus):
+- Every financial fact, ownership %, headcount, or pipeline status is tied to
+  a financial year. Put `fy` (e.g. "FY2024") inside source_location, e.g.
+  source_location: "p.142 §3.4 FY2024 quote: '...'".
+- Do NOT collapse different-year facts into one edge. Two `owns_pct` edges
+  between the same pair with different `fy` is correct and expected — graph
+  consumers will read them as a time series.
+- If a figure is restated, emit an extra `restated_from` edge linking the new
+  fact to the original, with the reason in the quote.
+
+Cross-document entity merging:
+- The Node ID rule above handles this automatically: same entity in different
+  years' filings produces the same ID and merges naturally.
+- For HK-listed issuers, prefer using the stock code in the label
+  (e.g. label "Tencent Holdings (0700.HK)") so the deterministic ID stays
+  stable across filings.
+
+Source citation is mandatory:
+- Every node and every edge MUST have source_location populated with
+  page number, section, and a verbatim quote <=30 words from the PDF.
+- Numbers without a page citation are unusable for SFC review — mark
+  AMBIGUOUS rather than emit an uncited figure.
+
 Output exactly this schema:
-{"nodes":[{"id":"stem_entity","label":"Human Readable Name","file_type":"code|document|paper|image|rationale|concept","source_file":"relative/path","source_location":null,"source_url":null,"captured_at":null,"author":null,"contributor":null}],"edges":[{"source":"node_id","target":"node_id","relation":"calls|implements|references|cites|conceptually_related_to|shares_data_with|semantically_similar_to","confidence":"EXTRACTED|INFERRED|AMBIGUOUS","confidence_score":1.0,"source_file":"relative/path","source_location":null,"weight":1.0}],"hyperedges":[],"input_tokens":0,"output_tokens":0}
+{"nodes":[{"id":"stem_entity","label":"Human Readable Name","file_type":"code|document|paper|image|rationale|concept","source_file":"relative/path","source_location":null,"source_url":null,"captured_at":null,"author":null,"contributor":null}],"edges":[{"source":"node_id","target":"node_id","relation":"calls|implements|references|cites|conceptually_related_to|shares_data_with|semantically_similar_to|owns_pct|controls|connected_to|beneficial_owner_of|director_of|audited_by|related_to|depends_on_customer|depends_on_supplier|impaired_by|litigating_against|subject_to_investigation|dealt_shares_in|restated_from|guarantees|pledges_assets_of|charges_over|lends_to","confidence":"EXTRACTED|INFERRED|AMBIGUOUS","confidence_score":1.0,"source_file":"relative/path","source_location":"p.142 §3.4 FY2024 quote: 'verbatim ≤30 words'","weight":1.0}],"hyperedges":[],"input_tokens":0,"output_tokens":0}
 """
 
 _DEEP_EXTRACTION_SUFFIX = """\
