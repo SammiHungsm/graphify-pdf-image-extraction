@@ -38,3 +38,6 @@ scripts/benchmark_kimi*.json
 scripts/benchmark_kimi*.py
 paper/
 .env
+
+# macOS Finder metadata
+.DS_Store
