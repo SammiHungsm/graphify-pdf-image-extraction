@@ -18,6 +18,11 @@ graphify-out/
 .graphify_python
 .claude/
 skills/
+# Local secrets and per-project env config — never commit.
+# .env.example is the git-tracked template (no leading-dot ignore catches it).
+.env
+.env.local
+.env.*.local
 # The packaged skill bundles under graphify/skills/ are generated, committed
 # artifacts (rendered by tools/skillgen). Keep them tracked even though the
 # broad skills/ rule above ignores install-target skill dirs elsewhere.

@@ -18,6 +18,17 @@ try:
 except Exception:
     __version__ = "unknown"
 
+# Auto-load .env from CWD upward so vision/LLM API keys (NVIDIA_API_KEY,
+# ANTHROPIC_API_KEY, GEMINI_API_KEY, etc.) and graphify config (GRAPHIFY_OUT,
+# GRAPHIFY_DEBUG, ...) work without manual `export`. Silent if dotenv missing.
+try:
+    from dotenv import load_dotenv
+    _dotenv_path = Path(__file__).resolve().parent.parent / ".env"
+    if _dotenv_path.exists():
+        load_dotenv(_dotenv_path)
+except ImportError:
+    pass
+
 # Output directory — override with GRAPHIFY_OUT env var for worktrees or shared-output setups.
 # Accepts a relative name ("graphify-out-feature") or an absolute path ("/shared/graphify-out").
 # Defined once in graphify.paths so the security/callflow path guards honour the

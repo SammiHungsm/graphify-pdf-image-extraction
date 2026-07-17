@@ -269,6 +269,91 @@ Only dispatch subagents for files listed in `graphify-out/.graphify_uncached.txt
 
 Load files from `graphify-out/.graphify_uncached.txt`. Split into chunks of 20-25 files each. Each image gets its own chunk (vision needs separate context). When splitting, group files from the same directory together so related artifacts land in the same chunk and cross-file relationships are more likely to be extracted.
 
+**Step B1.5 - Pre-convert PDFs to markdown with image descriptions**
+
+Before dispatching subagents, convert PDF files to markdown so inline `[IMAGE]` blocks carry vision-LLM descriptions (subagent reads as text, no vision needed). Each PDF may take up to 30 minutes depending on image count and vision API latency. To avoid bash-tool timeouts (Claude Code default 120s), run the conversion as a **detached background process** - the bash block returns in <1 second and the conversion continues until all PDFs are done. The script writes `_uncached.txt` after every PDF and the converter resumes from `.part.md` if interrupted, so re-running continues where it left off.
+
+If `convert_all_pdfs.py` exists at the project root, use it (handles batching, resume, progress, exits cleanly). Otherwise fall back to the inline loop below:
+
+```powershell
+# Start-Process: spawn detached python and return immediately, no bash timeout
+mkdir graphify-out -Force | Out-Null
+$log = "graphify-out/.convert.log"
+$err = "graphify-out/.convert.err"
+$pidFile = "graphify-out/.convert.pid"
+
+if (Test-Path convert_all_pdfs.py) {
+  $proc = Start-Process python -ArgumentList @('-u', 'convert_all_pdfs.py', 'raw') `
+    -WorkingDirectory (Get-Location) `
+    -RedirectStandardOutput $log `
+    -RedirectStandardError $err `
+    -WindowStyle Hidden -PassThru
+  $proc.Id | Set-Content $pidFile
+  Write-Host "B1.5 started in background (PID $($proc.Id)). Log: $log"
+} else {
+  Write-Host "convert_all_pdfs.py not found - using inline loop (will hit 120s bash timeout on long PDFs)"
+  $py = Get-Content graphify-out/.graphify_python
+  & $py -u -c @"
+import sys
+from pathlib import Path
+uncached_path = Path('graphify-out/.graphify_uncached.txt')
+uncached = [l.strip() for l in uncached_path.read_text(encoding='utf-8').splitlines() if l.strip()]
+try:
+    from graphify.pdf_image_ingest import convert_pdf_to_markdown
+except ImportError:
+    convert_pdf_to_markdown = None
+    print('pdf_image_ingest unavailable - subagents will process PDFs directly')
+if convert_pdf_to_markdown is not None:
+    pdf_files = [p for p in uncached if p.lower().endswith('.pdf')]
+    if not pdf_files:
+        print('No PDFs to pre-convert')
+    converted = {}
+    for i, p in enumerate(pdf_files, 1):
+        pp = Path(p)
+        print(f'[{i}/{len(pdf_files)}] {pp.name}', flush=True)
+        try:
+            md_path = convert_pdf_to_markdown(pp, pp.parent / 'pdf_md')
+            if md_path is not None:
+                converted[p] = str(md_path)
+                print(f'  -> {md_path.name}', flush=True)
+                new_uncached = [converted.get(x, x) for x in uncached]
+                uncached_path.write_text(chr(10).join(new_uncached), encoding='utf-8')
+        except KeyboardInterrupt:
+            print('  interrupted - partial progress saved')
+            break
+        except Exception as e:
+            print(f'  FAILED: {e}', flush=True)
+    print(f'Pre-converted {len(converted)}/{len(pdf_files)} PDFs')
+" 2>&1
+}
+```
+
+Do NOT wait for the conversion to finish. Subagent dispatch in Step B2 reads `_uncached.txt` which the background process updates incrementally - already-converted PDFs are routed to their `<stem>_<hash>.md` file, and any PDFs still being processed fall back to direct vision handling in the subagent. To check conversion progress later, see Step B1.6.
+
+**Step B1.6 - (Optional) Check B1.5 background progress**
+
+```powershell
+$pidFile = "graphify-out/.convert.pid"
+if (Test-Path $pidFile) {
+  $pidVal = (Get-Content $pidFile).Trim()
+  $proc = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
+  if ($proc) {
+    Write-Host "B1.5 still running (PID $pidVal). Last 15 log lines:"
+    Get-Content graphify-out/.convert.log -Tail 15
+  } else {
+    Write-Host "B1.5 finished. Final summary:"
+    Get-Content graphify-out/.convert.log -Tail 8
+  }
+  Write-Host ""
+  Write-Host "To stop: Stop-Process -Id $pidVal   (or kill the python process in Task Manager)"
+} else {
+  Write-Host "No background conversion running (.convert.pid not found)"
+}
+```
+
+PDFs that the converter cannot process (no PyMuPDF, vision API unreachable, oversized file) stay in `.graphify_uncached.txt` as raw paths and the subagent falls back to direct vision processing on them.
+
+
 **Step B2 - Dispatch ALL subagents in a single message**
 
 Call the Agent tool multiple times IN THE SAME RESPONSE - one call per chunk. This is the only way they run in parallel. If you make one Agent call, wait, then make another, you are doing it sequentially and defeating the purpose.
